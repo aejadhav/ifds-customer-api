@@ -35,6 +35,13 @@ return [
         ],
     ],
 
+    'reverb' => [
+        'app_key' => env('REVERB_APP_KEY'),
+        'host'    => env('REVERB_HOST', '127.0.0.1'),
+        'port'    => env('REVERB_PORT', 8080),
+        'scheme'  => env('REVERB_SCHEME', 'http'),
+    ],
+
     'bff' => [
         'internal_secret' => env('BFF_INTERNAL_SECRET'),
         'ifds_queue'      => env('IFDS_QUEUE_NAME', 'bff_customer'),

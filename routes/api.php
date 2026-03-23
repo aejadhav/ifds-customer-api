@@ -8,4 +8,5 @@ Route::prefix('v1')->group(function () {
     require __DIR__ . '/modules/orders.php';
     require __DIR__ . '/modules/payments.php';
     require __DIR__ . '/modules/internal.php';
+    require __DIR__ . '/modules/broadcasting.php';
 });
