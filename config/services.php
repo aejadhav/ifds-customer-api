@@ -52,4 +52,9 @@ return [
         'twofactor_api_key' => env('TWOFACTOR_API_KEY'),
     ],
 
+    'ifds' => [
+        'base_url'         => env('IFDS_INTERNAL_URL', 'http://127.0.0.1:8000'),
+        'service_password' => env('IFDS_SERVICE_PASSWORD', 'unused-service-account'),
+    ],
+
 ];
