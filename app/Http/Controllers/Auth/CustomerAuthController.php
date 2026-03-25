@@ -23,7 +23,7 @@ class CustomerAuthController extends Controller
     public function register(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'name'         => 'required|string|max:255',
+            'name'         => 'nullable|string|max:255',
             'mobile'       => 'required|string|size:10|unique:customer.customer_accounts,mobile',
             'email'        => 'nullable|email|unique:customer.customer_accounts,email',
             'company_name' => 'nullable|string|max:255',
@@ -35,7 +35,7 @@ class CustomerAuthController extends Controller
                 'id'           => Str::uuid()->toString(),
                 'mobile'       => $data['mobile'],
                 'email'        => $data['email'] ?? null,
-                'name'         => $data['name'],
+                'name'         => $data['name'] ?? $data['mobile'],
                 'company_name' => $data['company_name'] ?? null,
                 'gstin'        => $data['gstin'] ?? null,
                 'status'       => 'pending',
