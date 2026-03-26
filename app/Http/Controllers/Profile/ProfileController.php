@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Profile;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\UpdateCustomerProfileFromBffJob;
 use App\Models\CustomerDb\CustomerAddress;
 use App\Models\IfdsReadOnly\CustomerCreditSummary;
 use Illuminate\Http\JsonResponse;
@@ -74,6 +75,17 @@ class ProfileController extends Controller
         ]);
 
         $customer->fill($validated)->save();
+
+        // Sync to IFDS if account is linked
+        if ($customer->isSyncedToIfds()) {
+            UpdateCustomerProfileFromBffJob::dispatch(
+                ifdsCustomerId: $customer->ifds_customer_id,
+                name:           $validated['name'] ?? null,
+                email:          $validated['email'] ?? null,
+                companyName:    $validated['company_name'] ?? null,
+                gstin:          $validated['gstin'] ?? null,
+            )->onQueue(config('services.bff.ifds_queue', 'bff_customer'));
+        }
 
         return response()->json(['message' => 'Profile updated.', 'data' => $customer->only(['id', 'name', 'email', 'company_name', 'gstin'])]);
     }
