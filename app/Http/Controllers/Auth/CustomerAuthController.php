@@ -117,13 +117,14 @@ class CustomerAuthController extends Controller
             'token_type'   => 'bearer',
             'expires_in'   => config('jwt.ttl') * 60,
             'customer'     => [
-                'id'            => $customer->id,
-                'name'          => $customer->name,
-                'mobile'        => $customer->mobile,
-                'email'         => $customer->email,
-                'company_name'  => $customer->company_name,
-                'status'        => $customer->status,
-                'ifds_synced'   => $customer->ifds_synced,
+                'id'               => $customer->id,
+                'name'             => $customer->name,
+                'mobile'           => $customer->mobile,
+                'email'            => $customer->email,
+                'company_name'     => $customer->company_name,
+                'status'           => $customer->status,
+                'ifds_synced'      => $customer->ifds_synced,
+                'ifds_customer_id' => $customer->ifds_customer_id,
             ],
         ]);
     }
