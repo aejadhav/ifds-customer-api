@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\Customer\DispatchRegisterToIfdsJob;
+use App\Jobs\RegisterCustomerFromBffJob;
 use App\Models\CustomerDb\CustomerAccount;
 use App\Models\CustomerDb\CustomerProfile;
 use App\Services\Auth\OtpService;
@@ -46,8 +46,9 @@ class CustomerAuthController extends Controller
             return $account;
         });
 
-        // Dispatch registration to ifds for customer record creation + sync-back
-        DispatchRegisterToIfdsJob::dispatch(
+        // Dispatch using the IFDS job stub so the serialised class name matches
+        // what the IFDS queue worker expects (App\Jobs\RegisterCustomerFromBffJob).
+        RegisterCustomerFromBffJob::dispatch(
             bffCustomerId: $customer->id,
             mobile:        $customer->mobile,
             name:          $customer->name,

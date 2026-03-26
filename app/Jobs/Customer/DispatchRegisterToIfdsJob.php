@@ -33,8 +33,6 @@ class DispatchRegisterToIfdsJob implements ShouldQueue
     /**
      * This job itself just carries the payload onto the correct queue.
      * The actual handle() runs on the ifds side.
-     *
-     * Push via: DispatchRegisterToIfdsJob::dispatch(...)->onQueue('bff_customer');
      */
     public function handle(): void
     {
