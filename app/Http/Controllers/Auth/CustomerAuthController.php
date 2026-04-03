@@ -148,14 +148,20 @@ class CustomerAuthController extends Controller
     public function loginWithPassword(Request $request): JsonResponse
     {
         $request->validate([
-            'mobile'   => 'required|string|size:10',
+            'mobile'   => 'nullable|string|size:10',
+            'email'    => 'nullable|email',
             'password' => 'required|string',
         ]);
 
-        $customer = CustomerAccount::where('mobile', $request->mobile)->first();
+        $customer = null;
+        if ($request->mobile) {
+            $customer = CustomerAccount::where('mobile', $request->mobile)->first();
+        } elseif ($request->email) {
+            $customer = CustomerAccount::where('email', $request->email)->first();
+        }
 
         if (!$customer || !$customer->password || !Hash::check($request->password, $customer->password)) {
-            return response()->json(['success' => false, 'message' => 'Invalid mobile number or password.'], 401);
+            return response()->json(['success' => false, 'message' => 'Invalid credentials or password not set.'], 401);
         }
 
         if ($customer->status === 'suspended') {
