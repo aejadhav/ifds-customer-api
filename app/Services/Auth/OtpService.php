@@ -25,17 +25,17 @@ class OtpService
             return ['success' => false, 'message' => 'Too many failed attempts. Try again in 15 minutes.'];
         }
 
-        // Check resend cooldown
+        // Check resend cooldown (stored as Unix timestamp to avoid Carbon serialisation issues)
         $sentAt = Cache::get("otp_sent_at:{$mobile}");
-        if ($sentAt && now()->diffInSeconds($sentAt) < self::RESEND_COOLDOWN) {
-            $wait = self::RESEND_COOLDOWN - now()->diffInSeconds($sentAt);
+        if ($sentAt && (time() - (int) $sentAt) < self::RESEND_COOLDOWN) {
+            $wait = self::RESEND_COOLDOWN - (time() - (int) $sentAt);
             return ['success' => false, 'message' => "Please wait {$wait} seconds before requesting a new OTP."];
         }
 
         $otp = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 
         Cache::put("otp:{$mobile}", $otp, self::OTP_TTL_SECONDS);
-        Cache::put("otp_sent_at:{$mobile}", now(), self::RESEND_COOLDOWN + 10);
+        Cache::put("otp_sent_at:{$mobile}", time(), self::RESEND_COOLDOWN + 10);
         Cache::forget("otp_attempts:{$mobile}");
 
         $this->logAudit($mobile, 'sent', $ip);
