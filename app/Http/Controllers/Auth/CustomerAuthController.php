@@ -12,6 +12,7 @@ use App\Services\Auth\OtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Tymon\JWTAuth\Facades\JWTAuth;
 
@@ -104,6 +105,58 @@ class CustomerAuthController extends Controller
         }
 
         $customer = CustomerAccount::where('mobile', $request->mobile)->firstOrFail();
+
+        if ($customer->status === 'suspended') {
+            return response()->json(['success' => false, 'message' => 'Account suspended. Contact support.'], 403);
+        }
+
+        $token = JWTAuth::fromUser($customer);
+
+        return response()->json([
+            'success'      => true,
+            'access_token' => $token,
+            'token_type'   => 'bearer',
+            'expires_in'   => config('jwt.ttl') * 60,
+            'customer'     => [
+                'id'               => $customer->id,
+                'name'             => $customer->name,
+                'mobile'           => $customer->mobile,
+                'email'            => $customer->email,
+                'company_name'     => $customer->company_name,
+                'status'           => $customer->status,
+                'ifds_synced'      => $customer->ifds_synced,
+                'ifds_customer_id' => $customer->ifds_customer_id,
+            ],
+        ]);
+    }
+
+    // POST /auth/password/set  (protected — requires JWT)
+    public function setPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'password'              => 'required|string|min:8|confirmed',
+            'password_confirmation' => 'required|string',
+        ]);
+
+        $customer = $request->user();
+        $customer->update(['password' => Hash::make($request->password)]);
+
+        return response()->json(['success' => true, 'message' => 'Password set successfully.']);
+    }
+
+    // POST /auth/login-password  (public)
+    public function loginWithPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'mobile'   => 'required|string|size:10',
+            'password' => 'required|string',
+        ]);
+
+        $customer = CustomerAccount::where('mobile', $request->mobile)->first();
+
+        if (!$customer || !$customer->password || !Hash::check($request->password, $customer->password)) {
+            return response()->json(['success' => false, 'message' => 'Invalid mobile number or password.'], 401);
+        }
 
         if ($customer->status === 'suspended') {
             return response()->json(['success' => false, 'message' => 'Account suspended. Contact support.'], 403);

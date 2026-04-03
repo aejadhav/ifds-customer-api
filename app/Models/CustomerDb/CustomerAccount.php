@@ -19,10 +19,10 @@ class CustomerAccount extends Authenticatable implements JWTSubject
 
     protected $fillable = [
         'id', 'mobile', 'email', 'name', 'company_name', 'gstin',
-        'status', 'ifds_synced', 'ifds_customer_id',
+        'status', 'ifds_synced', 'ifds_customer_id', 'password',
     ];
 
-    protected $hidden = [];
+    protected $hidden = ['password'];
 
     protected $casts = [
         'ifds_synced'      => 'boolean',
