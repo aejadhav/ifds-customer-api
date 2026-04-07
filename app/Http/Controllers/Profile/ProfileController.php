@@ -87,6 +87,13 @@ class ProfileController extends Controller
             )->onQueue(config('services.bff.ifds_queue', 'bff_customer'));
         }
 
+        \Illuminate\Support\Facades\Log::info('Customer profile updated', [
+            'customer_id' => $customer->id,
+            'ip'          => request()->ip(),
+            'ua'          => request()->userAgent(),
+            'fields'      => array_keys($request->only(['name', 'email', 'company_name', 'gstin'])),
+        ]);
+
         return response()->json(['message' => 'Profile updated.', 'data' => $customer->only(['id', 'name', 'email', 'company_name', 'gstin'])]);
     }
 

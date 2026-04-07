@@ -106,6 +106,13 @@ class PaymentController extends Controller
             invoiceIds:     $validated['invoice_ids'] ?? null,
         )->onQueue(config('services.bff.ifds_queue', 'bff_customer'));
 
+        \Illuminate\Support\Facades\Log::info('Customer payment submitted', [
+            'customer_id' => $customer->id,
+            'ip'          => request()->ip(),
+            'amount'      => $validated['amount'],
+            'method'      => $validated['payment_method'],
+        ]);
+
         return response()->json([
             'success' => true,
             'message' => 'Payment submitted successfully. It will be verified by our team within 1 business day.',

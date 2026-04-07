@@ -50,6 +50,14 @@ class OtpService
             return ['success' => false, 'message' => 'Account locked. Try again in 15 minutes.'];
         }
 
+        // IP-based rate limit: max 20 OTP attempts per IP per 15 minutes across all mobiles
+        $ipKey      = "otp_ip_attempts:{$ip}";
+        $ipAttempts = (int) Cache::get($ipKey, 0);
+        if ($ipAttempts >= 20) {
+            $this->logAudit($mobile, 'ip_blocked', $ip);
+            return ['success' => false, 'message' => 'Too many attempts from this device. Try again later.'];
+        }
+
         $stored = Cache::get("otp:{$mobile}");
 
         if (!$stored) {
@@ -60,6 +68,9 @@ class OtpService
         if (!hash_equals($stored, $otp)) {
             $attempts = Cache::increment("otp_attempts:{$mobile}");
             $this->logAudit($mobile, 'failed', $ip);
+
+            // Increment IP-based counter on every failed attempt
+            Cache::put($ipKey, (int) Cache::get($ipKey, 0) + 1, self::LOCKOUT_SECONDS);
 
             if ($attempts >= self::MAX_ATTEMPTS) {
                 Cache::put("otp_locked:{$mobile}", true, self::LOCKOUT_SECONDS);

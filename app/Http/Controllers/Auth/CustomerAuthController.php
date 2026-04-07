@@ -28,7 +28,7 @@ class CustomerAuthController extends Controller
             'mobile'       => 'required|string|size:10|unique:customer.customer_accounts,mobile',
             'email'        => 'nullable|email|unique:customer.customer_accounts,email',
             'company_name' => 'nullable|string|max:255',
-            'gstin'        => 'nullable|string|max:20',
+            'gstin'        => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/'],
         ]);
 
         $customer = DB::connection('customer')->transaction(function () use ($data) {
@@ -191,13 +191,27 @@ class CustomerAuthController extends Controller
     // POST /auth/refresh
     public function refresh(): JsonResponse
     {
-        $token = JWTAuth::refresh(JWTAuth::getToken());
-        return response()->json([
-            'success'      => true,
-            'access_token' => $token,
-            'token_type'   => 'bearer',
-            'expires_in'   => config('jwt.ttl') * 60,
-        ]);
+        try {
+            $token = JWTAuth::refresh(JWTAuth::getToken());
+
+            // Check suspension after token refresh
+            $customer = auth('customer')->user();
+            if ($customer && $customer->status === 'suspended') {
+                JWTAuth::invalidate(JWTAuth::getToken());
+                return response()->json(['success' => false, 'message' => 'Account suspended. Contact support.'], 403);
+            }
+
+            return response()->json([
+                'success'      => true,
+                'access_token' => $token,
+                'token_type'   => 'bearer',
+                'expires_in'   => config('jwt.ttl') * 60,
+            ]);
+        } catch (\Tymon\JWTAuth\Exceptions\TokenExpiredException $e) {
+            return response()->json(['success' => false, 'message' => 'Token expired.'], 401);
+        } catch (\Throwable $e) {
+            return response()->json(['success' => false, 'message' => 'Could not refresh token.'], 401);
+        }
     }
 
     // POST /auth/logout

@@ -58,8 +58,8 @@ class NotificationController extends Controller
             'id'          => Str::uuid()->toString(),
             'customer_id' => $customer->id,
             'type'        => $validated['type'],
-            'title'       => $validated['title'],
-            'body'        => $validated['body'] ?? null,
+            'title'       => strip_tags($validated['title']),
+            'body'        => isset($validated['body']) ? strip_tags($validated['body']) : null,
             'data'        => $validated['data'] ?? null,
         ]);
 
