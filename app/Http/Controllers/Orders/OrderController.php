@@ -162,4 +162,78 @@ class OrderController extends Controller
 
         return response()->json(['data' => $order]);
     }
+
+    // ── POST /v1/orders/{orderNumber}/cancel ───────────────────────────────────
+
+    public function cancel(Request $request, string $orderNumber): JsonResponse
+    {
+        $customer = Auth::user();
+
+        if (!$customer->isSyncedToIfds()) {
+            return response()->json(['error' => 'Account not yet synced.'], 404);
+        }
+
+        $validated = $request->validate([
+            'cancellation_reason' => 'required|string|max:500',
+        ]);
+
+        $ifds_cid = (int) $customer->ifds_customer_id;
+
+        $order = CustomerOrder::forCustomer($ifds_cid)
+            ->where('order_number', $orderNumber)
+            ->first();
+
+        if (!$order) {
+            return response()->json(['error' => 'Order not found.'], 404);
+        }
+
+        // Only pending/confirmed orders can be cancelled by the customer
+        if (!in_array($order->status, ['pending', 'confirmed'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only pending or confirmed orders can be cancelled.',
+            ], 422);
+        }
+
+        // Get a service-account JWT (cached for 50 minutes)
+        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
+            $base = rtrim(config('services.ifds.base_url'), '/');
+            $res  = Http::post("{$base}/api/v1/auth/login", [
+                'email'    => 'portal-service@fuelflow.in',
+                'password' => config('services.ifds.service_password'),
+            ]);
+            if (!$res->successful()) {
+                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
+            }
+            return $res->json('access_token');
+        });
+
+        $base = rtrim(config('services.ifds.base_url'), '/');
+        $res  = Http::withToken($serviceToken)->timeout(10)
+            ->post("{$base}/api/v1/orders/{$order->id}/cancel", [
+                'cancellation_reason' => $validated['cancellation_reason'],
+            ]);
+
+        if (!$res->successful()) {
+            Log::warning('Portal order cancellation failed', [
+                'status'       => $res->status(),
+                'body'         => $res->body(),
+                'customer_id'  => $customer->id,
+                'order_number' => $orderNumber,
+            ]);
+            $message = $res->json('message') ?? 'Failed to cancel order.';
+            return response()->json(['success' => false, 'message' => $message], $res->status() >= 500 ? 500 : 422);
+        }
+
+        Log::info('Customer cancelled order', [
+            'customer_id'  => $customer->id,
+            'order_number' => $orderNumber,
+            'reason'       => $validated['cancellation_reason'],
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Order cancelled successfully.',
+        ]);
+    }
 }

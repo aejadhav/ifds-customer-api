@@ -10,7 +10,10 @@ use App\Models\IfdsReadOnly\CustomerInvoice;
 use App\Models\IfdsReadOnly\CustomerPayment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 
 class PaymentController extends Controller
 {
@@ -163,6 +166,54 @@ class PaymentController extends Controller
                 'per_page'     => $payments->perPage(),
                 'total'        => $payments->total(),
             ],
+        ]);
+    }
+
+    // ── GET /v1/invoices/{id}/pdf ──────────────────────────────────────────────
+
+    public function downloadInvoicePdf(int $id): \Symfony\Component\HttpFoundation\Response
+    {
+        $customer = Auth::user();
+
+        if (!$customer->isSyncedToIfds()) {
+            return response()->json(['error' => 'Account not yet synced.'], 404);
+        }
+
+        // Verify the invoice belongs to this customer before proxying
+        $invoice = CustomerInvoice::forCustomer((int) $customer->ifds_customer_id)
+            ->where('id', $id)
+            ->first();
+
+        if (!$invoice) {
+            return response()->json(['error' => 'Invoice not found.'], 404);
+        }
+
+        // Fetch service-account JWT (cached 50 min)
+        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
+            $base = rtrim(config('services.ifds.base_url'), '/');
+            $res  = Http::post("{$base}/api/v1/auth/login", [
+                'email'    => 'portal-service@fuelflow.in',
+                'password' => config('services.ifds.service_password'),
+            ]);
+            if (!$res->successful()) {
+                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
+            }
+            return $res->json('access_token');
+        });
+
+        // Find the IFDS order ID for this invoice to construct the URL
+        $base = rtrim(config('services.ifds.base_url'), '/');
+        $pdfRes = Http::withToken($serviceToken)
+            ->timeout(20)
+            ->get("{$base}/api/v1/orders/{$invoice->order_id}/invoice");
+
+        if (!$pdfRes->successful()) {
+            return response()->json(['error' => 'Failed to generate invoice PDF.'], 502);
+        }
+
+        return response($pdfRes->body(), 200, [
+            'Content-Type'        => $pdfRes->header('Content-Type') ?: 'application/pdf',
+            'Content-Disposition' => "attachment; filename=\"invoice-{$id}.pdf\"",
         ]);
     }
 }
