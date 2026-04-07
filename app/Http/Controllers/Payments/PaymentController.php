@@ -92,6 +92,19 @@ class PaymentController extends Controller
             'invoice_ids.*'  => 'integer',
         ]);
 
+        // H5: Validate payment amount does not exceed total outstanding balance
+        $ifds_cid = (int) $customer->ifds_customer_id;
+        $outstandingBalance = CustomerInvoice::forCustomer($ifds_cid)
+            ->whereIn('payment_status', ['unpaid', 'partial'])
+            ->sum('balance_amount');
+
+        if ((float) $validated['amount'] > (float) $outstandingBalance) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment amount exceeds your outstanding balance of ₹' . number_format((float) $outstandingBalance, 2),
+            ], 422);
+        }
+
         DispatchOfflinePaymentToIfdsJob::dispatch(
             ifdsCustomerId: (int) $customer->ifds_customer_id,
             bffCustomerId:  $customer->id,
