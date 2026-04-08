@@ -11,4 +11,5 @@ Route::prefix('v1')->group(function () {
     require __DIR__ . '/modules/broadcasting.php';
     require __DIR__ . '/modules/notifications.php';
     require __DIR__ . '/modules/support.php';
+    require __DIR__ . '/modules/reports.php';
 });
