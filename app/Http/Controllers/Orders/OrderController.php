@@ -236,4 +236,57 @@ class OrderController extends Controller
             'message' => 'Order cancelled successfully.',
         ]);
     }
+
+    // ── GET /v1/orders/{orderNumber}/delivery-note ─────────────────────────────
+
+    public function deliveryNote(string $orderNumber): \Symfony\Component\HttpFoundation\Response
+    {
+        $customer = Auth::user();
+
+        if (!$customer->isSyncedToIfds()) {
+            return response()->json(['error' => 'Account not yet synced.'], 404);
+        }
+
+        $ifds_cid = (int) $customer->ifds_customer_id;
+
+        $order = CustomerOrder::forCustomer($ifds_cid)
+            ->where('order_number', $orderNumber)
+            ->first();
+
+        if (!$order) {
+            return response()->json(['error' => 'Order not found.'], 404);
+        }
+
+        // Get service-account JWT (cached 50 min)
+        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
+            $base = rtrim(config('services.ifds.base_url'), '/');
+            $res  = Http::post("{$base}/api/v1/auth/login", [
+                'email'    => 'portal-service@fuelflow.in',
+                'password' => config('services.ifds.service_password'),
+            ]);
+            if (!$res->successful()) {
+                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
+            }
+            return $res->json('access_token');
+        });
+
+        $base   = rtrim(config('services.ifds.base_url'), '/');
+        $pdfRes = Http::withToken($serviceToken)
+            ->timeout(20)
+            ->get("{$base}/api/v1/orders/{$order->id}/delivery-note");
+
+        if (!$pdfRes->successful()) {
+            Log::warning('Portal delivery note PDF fetch failed', [
+                'status'       => $pdfRes->status(),
+                'customer_id'  => $customer->id,
+                'order_number' => $orderNumber,
+            ]);
+            return response()->json(['error' => 'Failed to generate delivery note PDF.'], 502);
+        }
+
+        return response($pdfRes->body(), 200, [
+            'Content-Type'        => $pdfRes->header('Content-Type') ?: 'application/pdf',
+            'Content-Disposition' => "attachment; filename=\"delivery-note-{$orderNumber}.pdf\"",
+        ]);
+    }
 }
