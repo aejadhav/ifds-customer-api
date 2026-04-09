@@ -71,7 +71,16 @@ class OrderController extends Controller
             'preferred_time'         => 'nullable|string',
             'payment_mode'           => 'nullable|string|in:credit,prepaid,upi,cash',
             'special_instructions'   => 'nullable|string|max:1000',
+            'idempotency_key'        => 'nullable|string|max:64',
         ]);
+
+        $idempotencyKey = $request->input('idempotency_key');
+        if ($idempotencyKey) {
+            $cached = Cache::get("idempotency:{$idempotencyKey}");
+            if ($cached) {
+                return response()->json(['data' => $cached, 'message' => 'Order placed successfully.'], 201);
+            }
+        }
 
         // Map portal product name → ifds product_id
         $productMap = ['HSD' => 1, 'Diesel' => 1, 'Petrol' => 2];
@@ -88,18 +97,7 @@ class OrderController extends Controller
             return response()->json(['message' => 'Delivery location not found.'], 422);
         }
 
-        // Get a service-account JWT (cached for 50 minutes)
-        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
-            $base = rtrim(config('services.ifds.base_url'), '/');
-            $res  = Http::post("{$base}/api/v1/auth/login", [
-                'email'    => 'portal-service@fuelflow.in',
-                'password' => config('services.ifds.service_password'),
-            ]);
-            if (!$res->successful()) {
-                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
-            }
-            return $res->json('access_token');
-        });
+        $serviceToken = $this->serviceToken();
 
         // Build ifds order payload using BFF address fields
         $payload = [
@@ -120,8 +118,31 @@ class OrderController extends Controller
             'order_channel'            => 'portal',
         ];
 
+        $cb = app(\App\Services\CircuitBreaker::class);
+
+        if ($cb->isOpen('ifds')) {
+            return response()->json(['message' => 'Service temporarily unavailable. Please try again shortly.'], 503);
+        }
+
         $base = rtrim(config('services.ifds.base_url'), '/');
-        $res  = Http::withToken($serviceToken)->timeout(10)->post("{$base}/api/v1/orders", $payload);
+
+        try {
+            $res = Http::withToken($serviceToken)->timeout(10)->post("{$base}/api/v1/orders", $payload);
+
+            if ($res->status() === 401) {
+                $serviceToken = $this->serviceToken(refresh: true);
+                $res = Http::withToken($serviceToken)->timeout(10)->post("{$base}/api/v1/orders", $payload);
+            }
+
+            if ($res->serverError()) {
+                $cb->recordFailure('ifds');
+            } else {
+                $cb->recordSuccess('ifds');
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $cb->recordFailure('ifds');
+            throw $e;
+        }
 
         if (!$res->successful()) {
             Log::warning('Portal order placement failed', [
@@ -136,6 +157,10 @@ class OrderController extends Controller
         }
 
         $order = $res->json('data');
+
+        if ($idempotencyKey) {
+            Cache::put("idempotency:{$idempotencyKey}", $order, now()->addHours(24));
+        }
 
         return response()->json(['data' => $order, 'message' => 'Order placed successfully.'], 201);
     }
@@ -195,24 +220,39 @@ class OrderController extends Controller
             ], 422);
         }
 
-        // Get a service-account JWT (cached for 50 minutes)
-        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
-            $base = rtrim(config('services.ifds.base_url'), '/');
-            $res  = Http::post("{$base}/api/v1/auth/login", [
-                'email'    => 'portal-service@fuelflow.in',
-                'password' => config('services.ifds.service_password'),
-            ]);
-            if (!$res->successful()) {
-                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
-            }
-            return $res->json('access_token');
-        });
+        $serviceToken = $this->serviceToken();
+
+        $cb = app(\App\Services\CircuitBreaker::class);
+
+        if ($cb->isOpen('ifds')) {
+            return response()->json(['message' => 'Service temporarily unavailable. Please try again shortly.'], 503);
+        }
 
         $base = rtrim(config('services.ifds.base_url'), '/');
-        $res  = Http::withToken($serviceToken)->timeout(10)
-            ->post("{$base}/api/v1/orders/{$order->id}/cancel", [
-                'cancellation_reason' => $validated['cancellation_reason'],
-            ]);
+
+        try {
+            $res = Http::withToken($serviceToken)->timeout(10)
+                ->post("{$base}/api/v1/orders/{$order->id}/cancel", [
+                    'cancellation_reason' => $validated['cancellation_reason'],
+                ]);
+
+            if ($res->status() === 401) {
+                $serviceToken = $this->serviceToken(refresh: true);
+                $res = Http::withToken($serviceToken)->timeout(10)
+                    ->post("{$base}/api/v1/orders/{$order->id}/cancel", [
+                        'cancellation_reason' => $validated['cancellation_reason'],
+                    ]);
+            }
+
+            if ($res->serverError()) {
+                $cb->recordFailure('ifds');
+            } else {
+                $cb->recordSuccess('ifds');
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $cb->recordFailure('ifds');
+            throw $e;
+        }
 
         if (!$res->successful()) {
             Log::warning('Portal order cancellation failed', [
@@ -237,6 +277,34 @@ class OrderController extends Controller
         ]);
     }
 
+    // ── Service token helper ───────────────────────────────────────────────────
+
+    /**
+     * Return a cached IFDS service-account JWT.
+     * TTL is aligned to the actual JWT lifetime minus a 60-second safety margin.
+     * Pass refresh: true to evict a stale token and fetch a fresh one (on 401).
+     */
+    private function serviceToken(bool $refresh = false): string
+    {
+        $ttl = (config('jwt.ttl', 60) * 60) - 60;
+
+        if ($refresh) {
+            Cache::forget('portal_service_jwt');
+        }
+
+        return Cache::remember('portal_service_jwt', $ttl, function () {
+            $base = rtrim(config('services.ifds.base_url'), '/');
+            $res  = Http::post("{$base}/api/v1/auth/login", [
+                'email'    => 'portal-service@fuelflow.in',
+                'password' => config('services.ifds.service_password'),
+            ]);
+            if (!$res->successful()) {
+                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
+            }
+            return $res->json('access_token');
+        });
+    }
+
     // ── GET /v1/orders/{orderNumber}/delivery-note ─────────────────────────────
 
     public function deliveryNote(string $orderNumber): \Symfony\Component\HttpFoundation\Response
@@ -257,23 +325,36 @@ class OrderController extends Controller
             return response()->json(['error' => 'Order not found.'], 404);
         }
 
-        // Get service-account JWT (cached 50 min)
-        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
-            $base = rtrim(config('services.ifds.base_url'), '/');
-            $res  = Http::post("{$base}/api/v1/auth/login", [
-                'email'    => 'portal-service@fuelflow.in',
-                'password' => config('services.ifds.service_password'),
-            ]);
-            if (!$res->successful()) {
-                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
-            }
-            return $res->json('access_token');
-        });
+        $serviceToken = $this->serviceToken();
 
-        $base   = rtrim(config('services.ifds.base_url'), '/');
-        $pdfRes = Http::withToken($serviceToken)
-            ->timeout(20)
-            ->get("{$base}/api/v1/orders/{$order->id}/delivery-note");
+        $cb = app(\App\Services\CircuitBreaker::class);
+
+        if ($cb->isOpen('ifds')) {
+            return response()->json(['message' => 'Service temporarily unavailable. Please try again shortly.'], 503);
+        }
+
+        $base = rtrim(config('services.ifds.base_url'), '/');
+
+        try {
+            $pdfRes = Http::withToken($serviceToken)
+                ->timeout(20)
+                ->get("{$base}/api/v1/orders/{$order->id}/delivery-note");
+
+            if ($pdfRes->status() === 401) {
+                $serviceToken = $this->serviceToken(refresh: true);
+                $pdfRes = Http::withToken($serviceToken)->timeout(20)
+                    ->get("{$base}/api/v1/orders/{$order->id}/delivery-note");
+            }
+
+            if ($pdfRes->serverError()) {
+                $cb->recordFailure('ifds');
+            } else {
+                $cb->recordSuccess('ifds');
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $cb->recordFailure('ifds');
+            throw $e;
+        }
 
         if (!$pdfRes->successful()) {
             Log::warning('Portal delivery note PDF fetch failed', [

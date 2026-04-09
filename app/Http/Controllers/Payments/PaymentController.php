@@ -169,6 +169,34 @@ class PaymentController extends Controller
         ]);
     }
 
+    // ── Service token helper ───────────────────────────────────────────────────
+
+    /**
+     * Return a cached IFDS service-account JWT.
+     * TTL is aligned to the actual JWT lifetime minus a 60-second safety margin.
+     * Pass refresh: true to evict a stale token and fetch a fresh one (on 401).
+     */
+    private function serviceToken(bool $refresh = false): string
+    {
+        $ttl = (config('jwt.ttl', 60) * 60) - 60;
+
+        if ($refresh) {
+            Cache::forget('portal_service_jwt');
+        }
+
+        return Cache::remember('portal_service_jwt', $ttl, function () {
+            $base = rtrim(config('services.ifds.base_url'), '/');
+            $res  = Http::post("{$base}/api/v1/auth/login", [
+                'email'    => 'portal-service@fuelflow.in',
+                'password' => config('services.ifds.service_password'),
+            ]);
+            if (!$res->successful()) {
+                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
+            }
+            return $res->json('access_token');
+        });
+    }
+
     // ── GET /v1/invoices/{id}/pdf ──────────────────────────────────────────────
 
     public function downloadInvoicePdf(int $id): \Symfony\Component\HttpFoundation\Response
@@ -188,24 +216,37 @@ class PaymentController extends Controller
             return response()->json(['error' => 'Invoice not found.'], 404);
         }
 
-        // Fetch service-account JWT (cached 50 min)
-        $serviceToken = Cache::remember('portal_service_jwt', 3000, function () {
-            $base = rtrim(config('services.ifds.base_url'), '/');
-            $res  = Http::post("{$base}/api/v1/auth/login", [
-                'email'    => 'portal-service@fuelflow.in',
-                'password' => config('services.ifds.service_password'),
-            ]);
-            if (!$res->successful()) {
-                throw new \RuntimeException('Portal service auth failed: ' . $res->body());
-            }
-            return $res->json('access_token');
-        });
+        $serviceToken = $this->serviceToken();
+
+        $cb = app(\App\Services\CircuitBreaker::class);
+
+        if ($cb->isOpen('ifds')) {
+            return response()->json(['message' => 'Service temporarily unavailable. Please try again shortly.'], 503);
+        }
 
         // Find the IFDS order ID for this invoice to construct the URL
         $base = rtrim(config('services.ifds.base_url'), '/');
-        $pdfRes = Http::withToken($serviceToken)
-            ->timeout(20)
-            ->get("{$base}/api/v1/orders/{$invoice->order_id}/invoice");
+
+        try {
+            $pdfRes = Http::withToken($serviceToken)
+                ->timeout(20)
+                ->get("{$base}/api/v1/orders/{$invoice->order_id}/invoice");
+
+            if ($pdfRes->status() === 401) {
+                $serviceToken = $this->serviceToken(refresh: true);
+                $pdfRes = Http::withToken($serviceToken)->timeout(20)
+                    ->get("{$base}/api/v1/orders/{$invoice->order_id}/invoice");
+            }
+
+            if ($pdfRes->serverError()) {
+                $cb->recordFailure('ifds');
+            } else {
+                $cb->recordSuccess('ifds');
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            $cb->recordFailure('ifds');
+            throw $e;
+        }
 
         if (!$pdfRes->successful()) {
             return response()->json(['error' => 'Failed to generate invoice PDF.'], 502);

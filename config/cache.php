@@ -94,8 +94,8 @@ return [
         'failover' => [
             'driver' => 'failover',
             'stores' => [
-                'database',
-                'array',
+                'redis',    // primary: fast, distributed
+                'database', // fallback: if Redis is unavailable
             ],
         ],
 
