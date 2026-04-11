@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('auth')->group(function () {
     Route::post('register',         [CustomerAuthController::class, 'register'])->middleware('throttle:10,1');
     Route::post('send-otp',         [CustomerAuthController::class, 'sendOtp'])->middleware('throttle:5,1');
-    Route::post('verify-otp',       [CustomerAuthController::class, 'verifyOtp'])->middleware(['throttle:10,1', 'throttle:20,1:ip']);
+    Route::post('verify-otp',       [CustomerAuthController::class, 'verifyOtp'])->middleware('throttle:10,1');
     Route::post('login-password',   [CustomerAuthController::class, 'loginWithPassword'])->middleware('throttle:10,1');
 
     // Protected auth routes
